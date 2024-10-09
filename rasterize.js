@@ -17,6 +17,8 @@ var triBufferSize; // the number of indices in the triangle buffer
 var altPosition; // flag indicating whether to alter vertex positions
 var vertexPositionAttrib; // where to put position for vertex shader
 var altPositionUniform; // where to put altPosition flag for vertex shader
+var colorBuffer;
+var vertexColorAttrib;
 
 
 // ASSIGNMENT HELPER FUNCTIONS
