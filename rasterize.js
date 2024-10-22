@@ -4,10 +4,12 @@
 const WIN_Z = 0;  // default graphics window z coord in world space
 const WIN_LEFT = 0; const WIN_RIGHT = 1;  // default left and right x coords in world space
 const WIN_BOTTOM = 0; const WIN_TOP = 1;  // default top and bottom y coords in world space
-const INPUT_TRIANGLES_URL = "https://ncsucgclass.github.io/prog3/triangles.json"; // triangles file loc
+const INPUT_TRIANGLES_URL = "https://ncsucgclass.github.io/prog3/triangles2.json"; // triangles file loc
 const INPUT_ELLIPSOIDS_URL = "https://ncsucgclass.github.io/prog3/ellipsoids.json";
 //const INPUT_SPHERES_URL = "https://ncsucgclass.github.io/prog3/spheres.json"; // spheres file loc
 var Eye = new vec4.fromValues(0.5,0.5,-0.5,1.0); // default eye position in world space
+var lookAt = new vec4.fromValues(0, 0, 1); // default lookAt position in world space
+var lookUp = new vec4.fromValues(0, 1, 0); // default lookUp vector in world space
 
 /* webgl globals */
 var gl = null; // the all powerful gl object. It's all here folks!
@@ -34,6 +36,7 @@ var viewPositionUniform;
 var lightPositionUniform;
 var lightColorUniform;
 
+var shaderProgram;
 // ASSIGNMENT HELPER FUNCTIONS
 
 // get the JSON file from the passed URL
@@ -172,67 +175,57 @@ function setupShaders() {
     
     // define fragment shader in essl using es6 template strings
     var fShaderCode = `
-        precision mediump float;
+    precision mediump float;
 
-        varying vec3 fragColor;
-        varying vec3 fragNormal;
-        varying vec3 fragPosition;
-        varying vec3 specularColor;
-        varying vec3 ambientColor;
-        varying float shininess;
+    varying vec3 fragColor;
+    varying vec3 fragNormal;
+    varying vec3 fragPosition;
+    varying vec3 specularColor;
+    varying vec3 ambientColor;
+    varying float shininess;
 
-        uniform vec3 lightPosition;
-        uniform vec3 viewPosition;
-        uniform vec3 lightColor;
+    uniform vec3 lightPosition;
+    uniform vec3 viewPosition;
+    uniform vec3 lightColor;
 
-        void main(void) {
-            vec3 normal = normalize(fragNormal);
-            vec3 lightDir = normalize(lightPosition - fragPosition);
+    void main(void) {
+        vec3 normal = normalize(fragNormal);
+        vec3 lightDir = normalize(lightPosition - fragPosition);
 
-            vec3 ambient = ambientColor * lightColor;
+        vec3 ambient = ambientColor * lightColor;
 
-            float diff = max(dot(normal, lightDir), 0.0);
-            vec3 diffuse = diff * lightColor;
+        float diff = max(dot(normal, lightDir), 0.0);
+        vec3 diffuse = diff * lightColor;
 
-            vec3 viewDir = normalize(viewPosition - fragPosition);
-            vec3 reflectDir = reflect(-lightDir, normal);
-            float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
-            vec3 specular = specularColor * spec * lightColor;
+        vec3 viewDir = normalize(viewPosition - fragPosition);
+        vec3 reflectDir = reflect(-lightDir, normal);
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+        vec3 specular = specularColor * spec * lightColor;
 
-            vec3 finalColor = (ambient + diffuse + specular) * fragColor;
-            gl_FragColor = vec4(finalColor, 1.0); // color specified by fragColor
-        }
-    `;
+        vec3 finalColor = (ambient + diffuse + specular) * fragColor;
+        gl_FragColor = vec4(finalColor, 1.0);
+    }
+`;
+
     
     // define vertex shader in essl using es6 template strings
     var vShaderCode = `
-        attribute vec3 vertexPosition;
-        attribute vec3 vertexColor;
-        attribute vec3 vertexNormal;
-        attribute vec3 specAttrib;
-        attribute vec3 ambAttrib;
-        attribute float shinAttrib;
-
+        attribute vec3 aVertexPosition;
+        attribute vec3 aVertexNormal;
+        attribute vec4 aVertexColor;
+        uniform mat4 uMVPMatrix;
+        uniform mat4 uModelMatrix; // New: model transformation matrix
+        varying vec3 vNormal;
+        varying vec3 vFragPos;
+        varying vec4 vColor;
         varying vec3 fragColor;
-        varying vec3 fragNormal;
-        varying vec3 fragPosition;
-        varying vec3 specularColor;
-        varying vec3 ambientColor;
-        varying float shininess;
-
-        uniform bool altPosition;
-
         void main(void) {
-            fragColor = vertexColor;
-            specularColor = specAttrib;
-            ambientColor = ambAttrib;
-            shininess = shinAttrib;
-            fragNormal = vertexNormal;
-            fragPosition = vertexPosition;
-            if(altPosition)
-                gl_Position = vec4(vertexPosition + vec3(-1.0, -1.0, 0.0), 1.0); // use the altered position
-            else
-                gl_Position = vec4(vertexPosition, 1.0); // use the untransformed position
+            vec4 transformedPosition = uModelMatrix * vec4(aVertexPosition, 1.0);
+            gl_Position = uMVPMatrix * transformedPosition;
+            vFragPos = vec3(transformedPosition);
+            vNormal = aVertexNormal;
+            vColor = aVertexColor;
+            fragColor = aVertexColor.xyz;
         }
     `;
     
@@ -254,7 +247,7 @@ function setupShaders() {
             throw "error during vertex shader compile: " + gl.getShaderInfoLog(vShader);  
             gl.deleteShader(vShader);
         } else { // no compile errors
-            var shaderProgram = gl.createProgram(); // create the single shader program
+            shaderProgram = gl.createProgram(); // create the single shader program
             gl.attachShader(shaderProgram, fShader); // put frag shader in program
             gl.attachShader(shaderProgram, vShader); // put vertex shader in program
             gl.linkProgram(shaderProgram); // link program into gl context
@@ -295,19 +288,20 @@ function setupShaders() {
     catch(e) {
         console.log(e);
     } // end catch
-    altPosition = false;
-    setTimeout(function alterPosition() {
-        altPosition = !altPosition;
-        setTimeout(alterPosition, 2000);
-    }, 2000); // switch flag value every 2 seconds
+    // altPosition = false;
+    // setTimeout(function alterPosition() {
+    //     altPosition = !altPosition;
+    //     setTimeout(alterPosition, 2000);
+    // }, 2000);s
 } // end setup shaders
 var bgColor = 0;
 // render the loaded model
 function renderTriangles() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); // clear frame/depth buffers
-    bgColor = (bgColor < 1) ? (bgColor + 0.001) : 0;
-    gl.clearColor(bgColor, 0, 0, 1.0);
-    requestAnimationFrame(renderTriangles);
+    // bgColor = (bgColor < 1) ? (bgColor + 0.001) : 0;
+    // gl.clearColor(bgColor, 0, 0, 1.0);
+    gl.useProgram(shaderProgram);
+    
     // vertex buffer: activate and feed into vertex shader
     gl.bindBuffer(gl.ARRAY_BUFFER,vertexBuffer); // activate
     gl.vertexAttribPointer(vertexPositionAttrib,3,gl.FLOAT,false,0,0); // feed
@@ -333,11 +327,88 @@ function renderTriangles() {
     gl.uniform3fv(lightColorUniform, [1.0, 1.0, 1.0]);
 
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, triangleBuffer);
+    console.log(gl.getProgramParameter(shaderProgram, gl.ACTIVE_UNIFORMS));
+    console.log(gl.getProgramParameter(shaderProgram, gl.ACTIVE_ATTRIBUTES));
+    console.log(gl.getProgramParameter(shaderProgram, gl.LINK_STATUS));
     gl.drawElements(gl.TRIANGLES, triBufferSize, gl.UNSIGNED_SHORT, 0); // new rendering
 
     // gl.drawArrays(gl.TRIANGLES,0,3); // render
+    requestAnimationFrame(renderTriangles);
 } // end render triangles
 
+function handleKeydown(event) {
+    switch (event.key) {
+      case 'a':
+        // Translate view left
+        Eye[0] -= 0.1;
+        lookAt[0] -= 0.1;
+        break;
+      case 'd':
+        // Translate view right
+        Eye[0] += 0.1;
+        lookAt[0] += 0.1;
+        break;
+      case 'w':
+        // Translate view forward
+        Eye[2] -= 0.1;
+        lookAt[2] -= 0.1;
+        break;
+      case 's':
+        // Translate view backward
+        Eye[2] += 0.1;
+        lookAt[2] += 0.1;
+        break;
+      case 'q':
+        // Translate view up
+        Eye[1] += 0.1;
+        lookAt[1] += 0.1;
+        break;
+      case 'e':
+        // Translate view down
+        Eye[1] -= 0.1;
+        lookAt[1] -= 0.1;
+        break;
+      case 'A':
+        // Rotate view left
+        let angle = 0.1;
+        let cosAngle = Math.cos(angle);
+        let sinAngle = Math.sin(angle);
+        let tempX = lookAt[0];
+        lookAt[0] = lookAt[0] * cosAngle - lookAt[2] * sinAngle;
+        lookAt[2] = tempX * sinAngle + lookAt[2] * cosAngle;
+        break;
+      case 'D':
+        // Rotate view right
+        angle = -0.1;
+        cosAngle = Math.cos(angle);
+        sinAngle = Math.sin(angle);
+        tempX = lookAt[0];
+        lookAt[0] = lookAt[0] * cosAngle - lookAt[2] * sinAngle;
+        lookAt[2] = tempX * sinAngle + lookAt[2] * cosAngle;
+        break;
+      case 'W':
+        // Rotate view forward
+        angle = 0.1;
+        cosAngle = Math.cos(angle);
+        sinAngle = Math.sin(angle);
+        let tempY = lookAt[1];
+        lookAt[1] = lookAt[1] * cosAngle - lookAt[2] * sinAngle;
+        lookAt[2] = tempY * sinAngle + lookAt[2] * cosAngle;
+        break;
+      case 'S':
+        // Rotate view backward
+        angle = -0.1;
+        cosAngle = Math.cos(angle);
+        sinAngle = Math.sin(angle);
+        tempY = lookAt[1];
+        lookAt[1] = lookAt[1] * cosAngle - lookAt[2] * sinAngle;
+        lookAt[2] = tempY * sinAngle + lookAt[2] * cosAngle;
+        break;
+    }
+    // Recalculate viewing transform matrix
+    viewingTransform = mat4.create();
+    mat4.lookAt(viewingTransform, Eye, lookAt, lookUp);
+  }
 
 /* MAIN -- HERE is where execution begins after window load */
 
@@ -349,3 +420,6 @@ function main() {
   renderTriangles(); // draw the triangles using webGL
   
 } // end main
+
+document.addEventListener('keydown', handleKeydown);
+
