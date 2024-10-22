@@ -17,9 +17,22 @@ var triBufferSize; // the number of indices in the triangle buffer
 var altPosition; // flag indicating whether to alter vertex positions
 var vertexPositionAttrib; // where to put position for vertex shader
 var altPositionUniform; // where to put altPosition flag for vertex shader
-var colorBuffer;
-var vertexColorAttrib;
 
+var vertexColorAttrib;
+var vertexNormalAttrib;
+var ambientAttrib;
+var specularAttrib;
+var shininessAttrib;
+
+var colorBuffer;
+var normalBuffer;
+var ambientBuffer;
+var specularBuffer;
+var shininessBuffer;
+
+var viewPositionUniform;
+var lightPositionUniform;
+var lightColorUniform;
 
 // ASSIGNMENT HELPER FUNCTIONS
 
@@ -82,15 +95,26 @@ function loadTriangles() {
         var coordArray = []; // 1D array of vertex coords for WebGL
         var indexArray = [];
         var colorArray = [];
+        var specularArray = [];
+        var ambientArray = [];
+        var normalArray = [];
+        var shininessArray = [];
         var count = 0;
         
         for (var whichSet=0; whichSet<inputTriangles.length; whichSet++) {
-            var material = inputTriangles[whichSet].material.diffuse;
-            
+            var material = inputTriangles[whichSet].material;
+            var ambient = material.ambient;
+            var diffuse = material.diffuse;
+            var specular = material.specular;
+            var shininess = material.n;
             // set up the vertex coord array
             for (whichSetVert=0; whichSetVert<inputTriangles[whichSet].vertices.length; whichSetVert++){
                 coordArray = coordArray.concat(inputTriangles[whichSet].vertices[whichSetVert]);
-                colorArray = colorArray.concat(material);
+                colorArray = colorArray.concat(diffuse);
+                ambientArray = ambientArray.concat(ambient);
+                specularArray = specularArray.concat(specular);
+                normalArray = normalArray.concat(inputTriangles[whichSet].normals[whichSetVert]);
+                console.log(normalArray);
                 // console.log(inputTriangles[whichSet].vertices[whichSetVert]);
             }
             var triangles = inputTriangles[whichSet].triangles;
@@ -99,11 +123,18 @@ function loadTriangles() {
                 indexArray.push(triangle[0] + count);
                 indexArray.push(triangle[1] + count);
                 indexArray.push(triangle[2] + count);
+
+                shininessArray.push(shininess);
+                shininessArray.push(shininess);
+                shininessArray.push(shininess);
+
+
             }
             count += inputTriangles[whichSet].vertices.length;
         } // end for each triangle set 
         // console.log(coordArray.length);
         // send the vertex coords to webGL
+
         vertexBuffer = gl.createBuffer(); // init empty vertex coord buffer
         gl.bindBuffer(gl.ARRAY_BUFFER,vertexBuffer); // activate that buffer
         gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(coordArray),gl.STATIC_DRAW); // coords to that buffer
@@ -112,12 +143,27 @@ function loadTriangles() {
         gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colorArray), gl.STATIC_DRAW);
 
+        ambientBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, ambientBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(ambientArray), gl.STATIC_DRAW);
+
+        specularBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, specularBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(specularArray), gl.STATIC_DRAW);
+
+        shininessBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, shininessBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(shininessArray), gl.STATIC_DRAW)
+
         triangleBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, triangleBuffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indexArray), gl.STATIC_DRAW);
 
-        triBufferSize = indexArray.length;
+        normalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalArray), gl.STATIC_DRAW);
 
+        triBufferSize = indexArray.length;
     } // end if triangles found
 } // end load triangles
 
@@ -127,9 +173,34 @@ function setupShaders() {
     // define fragment shader in essl using es6 template strings
     var fShaderCode = `
         precision mediump float;
+
         varying vec3 fragColor;
+        varying vec3 fragNormal;
+        varying vec3 fragPosition;
+        varying vec3 specularColor;
+        varying vec3 ambientColor;
+        varying float shininess;
+
+        uniform vec3 lightPosition;
+        uniform vec3 viewPosition;
+        uniform vec3 lightColor;
+
         void main(void) {
-            gl_FragColor = vec4(fragColor, 1.0); // color specified by fragColor
+            vec3 normal = normalize(fragNormal);
+            vec3 lightDir = normalize(lightPosition - fragPosition);
+
+            vec3 ambient = ambientColor * lightColor;
+
+            float diff = max(dot(normal, lightDir), 0.0);
+            vec3 diffuse = diff * lightColor;
+
+            vec3 viewDir = normalize(viewPosition - fragPosition);
+            vec3 reflectDir = reflect(-lightDir, normal);
+            float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+            vec3 specular = specularColor * spec * lightColor;
+
+            vec3 finalColor = (ambient + diffuse + specular) * fragColor;
+            gl_FragColor = vec4(finalColor, 1.0); // color specified by fragColor
         }
     `;
     
@@ -137,15 +208,31 @@ function setupShaders() {
     var vShaderCode = `
         attribute vec3 vertexPosition;
         attribute vec3 vertexColor;
+        attribute vec3 vertexNormal;
+        attribute vec3 specAttrib;
+        attribute vec3 ambAttrib;
+        attribute float shinAttrib;
+
         varying vec3 fragColor;
+        varying vec3 fragNormal;
+        varying vec3 fragPosition;
+        varying vec3 specularColor;
+        varying vec3 ambientColor;
+        varying float shininess;
+
         uniform bool altPosition;
 
         void main(void) {
+            fragColor = vertexColor;
+            specularColor = specAttrib;
+            ambientColor = ambAttrib;
+            shininess = shinAttrib;
+            fragNormal = vertexNormal;
+            fragPosition = vertexPosition;
             if(altPosition)
                 gl_Position = vec4(vertexPosition + vec3(-1.0, -1.0, 0.0), 1.0); // use the altered position
             else
                 gl_Position = vec4(vertexPosition, 1.0); // use the untransformed position
-            fragColor = vertexColor;
         }
     `;
     
@@ -176,14 +263,31 @@ function setupShaders() {
                 throw "error during shader program linking: " + gl.getProgramInfoLog(shaderProgram);
             } else { // no shader program link errors
                 gl.useProgram(shaderProgram); // activate shader program (frag and vert)
-                vertexPositionAttrib = // get pointer to vertex shader input
-                    gl.getAttribLocation(shaderProgram, "vertexPosition"); 
+
+                vertexPositionAttrib = gl.getAttribLocation(shaderProgram, "vertexPosition"); 
                 gl.enableVertexAttribArray(vertexPositionAttrib); // input to shader from array
-                altPositionUniform = // get pointer to altPosition flag
-                    gl.getUniformLocation(shaderProgram, "altPosition");
+
+                altPositionUniform = gl.getUniformLocation(shaderProgram, "altPosition");
                 
                 vertexColorAttrib = gl.getAttribLocation(shaderProgram, "vertexColor");
                 gl.enableVertexAttribArray(vertexColorAttrib);
+
+                vertexNormalAttrib = gl.getAttribLocation(shaderProgram, "vertexNormal");
+                gl.enableVertexAttribArray(vertexNormalAttrib);
+
+                specularAttrib = gl.getAttribLocation(shaderProgram, "specAttrib");
+                gl.enableVertexAttribArray(specularAttrib);
+
+                ambientAttrib = gl.getAttribLocation(shaderProgram, "ambAttrib");
+                gl.enableVertexAttribArray(ambientAttrib);
+
+                shininessAttrib = gl.getAttribLocation(shaderProgram, "shinAttrib");
+                gl.enableVertexAttribArray(shininessAttrib);
+
+                viewPositionUniform = gl.getUniformLocation(shaderProgram, "viewPosition");
+                lightColorUniform = gl.getUniformLocation(shaderProgram, "lightColor");
+                lightPositionUniform = gl.getUniformLocation(shaderProgram, "lightPosition");
+                
             } // end if no shader program link errors
         } // end if no compile errors
     } // end try 
@@ -211,6 +315,22 @@ function renderTriangles() {
 
     gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
     gl.vertexAttribPointer(vertexColorAttrib, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+    gl.vertexAttribPointer(vertexNormalAttrib, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, ambientBuffer);
+    gl.vertexAttribPointer(ambientAttrib, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, specularBuffer);
+    gl.vertexAttribPointer(specularAttrib, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, shininessBuffer);
+    gl.vertexAttribPointer(shininessAttrib, 1, gl.FLOAT, false, 0, 0);
+
+    gl.uniform3fv(lightPositionUniform, [-0.5, 1.5, -0.5]);
+    gl.uniform3fv(viewPositionUniform, [Eye[0], Eye[1], Eye[2]]);
+    gl.uniform3fv(lightColorUniform, [1.0, 1.0, 1.0]);
 
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, triangleBuffer);
     gl.drawElements(gl.TRIANGLES, triBufferSize, gl.UNSIGNED_SHORT, 0); // new rendering

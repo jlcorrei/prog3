@@ -4,7 +4,7 @@
 const WIN_Z = 0;  
 const WIN_LEFT = 0; const WIN_RIGHT = 1;  
 const WIN_BOTTOM = 0; const WIN_TOP = 1;  
-const INPUT_TRIANGLES_URL = "https://ncsucgclass.github.io/prog3/triangles.json"; 
+const INPUT_TRIANGLES_URL = "https://ncsucgclass.github.io/prog3/triangles2.json"; 
 var Eye = new vec4.fromValues(0.5, 0.5, -0.5, 1.0); // default eye position in world space
 
 /* webgl globals */
@@ -15,6 +15,9 @@ var triBufferSize;
 var altPosition; 
 var vertexPositionAttrib; 
 var altPositionUniform; 
+var shaderProgram;
+var modelViewMatrix;
+var coordArray = [];
 
 // Camera control variables
 var viewMatrix;
@@ -74,124 +77,163 @@ function setupWebGL() {
 function loadTriangles() {
     var inputTriangles = getJSONFile(INPUT_TRIANGLES_URL, "triangles");
     if (inputTriangles != String.null) { 
-        var coordArray = []; // 1D array of vertex coords for WebGL
-        var normalArray = []; // 1D array of vertex normals for WebGL
+        var whichSetVert, whichSetTri; 
+        var coordArray = []; 
+        var normalArray = []; 
+        var colorArray = [];
 
-        // Populate models array and build coord and normal arrays
         for (var whichSet = 0; whichSet < inputTriangles.length; whichSet++) {
-            var model = {
-                vertices: inputTriangles[whichSet].vertices,
-                normals: inputTriangles[whichSet].normals,
-                color: inputTriangles[whichSet].color,
-                // Store indices for rendering if needed
-            };
-            models.push(model);
-            
-            // Add vertices to the coordArray
-            for (var i = 0; i < model.vertices.length; i++) {
-                coordArray = coordArray.concat(model.vertices[i]);
+            var vertices = inputTriangles[whichSet].vertices;
+            var normals = inputTriangles[whichSet].normals; // assuming normals are provided in JSON
+            var colors = inputTriangles[whichSet].material.diffuse; // assuming material colors are in 'material'
+
+            for (whichSetVert = 0; whichSetVert < vertices.length; whichSetVert++) {
+                coordArray = coordArray.concat(vertices[whichSetVert]);
+                normalArray = normalArray.concat(normals[whichSetVert]);
+                colorArray = colorArray.concat(colors);
             }
-
-            // Add normals to the normalArray
-            if (model.normals) { // Check if normals exist
-                for (var j = 0; j < model.normals.length; j++) {
-                    normalArray = normalArray.concat(model.normals[j]);
-                }
-            } else {
-                console.warn("No normals found for model set " + whichSet);
-            }
-        } // end for each triangle set 
-
-        // Send the vertex coords to WebGL
-        vertexBuffer = gl.createBuffer(); // init empty vertex coord buffer
-        gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer); // activate that buffer
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(coordArray), gl.STATIC_DRAW); // coords to that buffer
-
-        // Send the vertex normals to WebGL
-        if (normalArray.length > 0) { // Check if normals were loaded
-            normalBuffer = gl.createBuffer(); // Create buffer for normals
-            gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer); // Activate that buffer
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalArray), gl.STATIC_DRAW); // Normals to that buffer
-        } else {
-            console.warn("No vertex normals to upload to GPU.");
         }
 
-        triBufferSize = coordArray.length / 3; // Calculate the number of triangles based on vertex count
-    } // end if triangles found
-} // end loadTriangles
+        // send vertex coords to webGL
+        vertexBuffer = gl.createBuffer(); 
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer); 
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(coordArray), gl.STATIC_DRAW); 
+
+        // send normals to webGL
+        normalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalArray), gl.STATIC_DRAW);
+
+        // send colors to webGL
+        colorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colorArray), gl.STATIC_DRAW);
+    } 
+}
+
 
 function setupShaders() {
+    // vertex shader
+    var vShaderCode = `
+        attribute vec3 aVertexPosition;
+        attribute vec3 aVertexNormal;
+        attribute vec4 aVertexColor;
+        uniform mat4 uMVPMatrix;
+        uniform mat4 uModelMatrix; // New: model transformation matrix
+        varying vec3 vNormal;
+        varying vec3 vFragPos;
+        varying vec4 vColor;
+        void main(void) {
+            vec4 transformedPosition = uModelMatrix * vec4(aVertexPosition, 1.0);
+            gl_Position = uMVPMatrix * transformedPosition;
+            vFragPos = vec3(transformedPosition);
+            vNormal = aVertexNormal;
+            vColor = aVertexColor;
+        }
+    `;
+
+    // fragment shader
     var fShaderCode = `
         precision mediump float;
         varying vec3 vNormal;
-        varying vec3 vLight;
+        varying vec3 vFragPos;
+        varying vec4 vColor;
         uniform vec3 lightPos;
+        uniform vec3 viewPos;
+        uniform vec3 lightColor;
 
         void main(void) {
-            vec3 ambientColor = vec3(1.0, 1.0, 1.0) * 0.1; // ambient light
-            vec3 lightDir = normalize(vLight);
-            float diff = max(dot(vNormal, lightDir), 0.0);
-            vec3 diffuseColor = vec3(1.0, 0.0, 0.0) * diff; // replace with actual color
-            gl_FragColor = vec4(ambientColor + diffuseColor, 1.0);
+            vec3 ambient = 0.1 * lightColor;
+
+            vec3 norm = normalize(vNormal);
+            vec3 lightDir = normalize(lightPos - vFragPos);
+            float diff = max(dot(norm, lightDir), 0.0);
+            vec3 diffuse = diff * lightColor;
+
+            vec3 viewDir = normalize(viewPos - vFragPos);
+            vec3 reflectDir = reflect(-lightDir, norm);
+            float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+            vec3 specular = 0.5 * spec * lightColor;
+
+            vec3 result = (ambient + diffuse + specular) * vec3(vColor);
+            gl_FragColor = vec4(result, 1.0);
         }
     `;
 
-    var vShaderCode = `
-        attribute vec3 vertexPosition;
-        attribute vec3 vertexNormal;
-        uniform mat4 modelViewMatrix;
-        uniform mat4 projectionMatrix;
-        varying vec3 vNormal;
-        varying vec3 vLight;
+    // compile shaders
+    var vertexShader = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vertexShader, vShaderCode);
+    gl.compileShader(vertexShader);
 
-        void main(void) {
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(vertexPosition, 1.0);
-            vNormal = normalize(vec3(modelViewMatrix * vec4(vertexNormal, 0.0)));
-            vLight = normalize(vec3(0.5, 1.5, -0.5)); // light position
-        }
-    `;
+    var fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fragmentShader, fShaderCode);
+    gl.compileShader(fragmentShader);
 
-    // Same shader setup as your original code, but also handling vertex normals...
+    // check for compilation errors
+    if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
+        alert("Vertex shader compilation error: " + gl.getShaderInfoLog(vertexShader));
+        return null;
+    }
+    if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
+        alert("Fragment shader compilation error: " + gl.getShaderInfoLog(fragmentShader));
+        return null;
+    }
+
+    // create and link the program
+    var shaderProgram = gl.createProgram();
+    // var modelViewMatrixUniform = gl.getUniformLocation(shaderProgram, "uModelViewMatrix");
+    // var mvpUniform = gl.getUniformLocation(shaderProgram, "uMVPMatrix");
+    gl.attachShader(shaderProgram, vertexShader);
+    gl.attachShader(shaderProgram, fragmentShader);
+    gl.linkProgram(shaderProgram);
+
+    if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+        alert("Failed to setup shaders");
+        return null;
+    }
+
+    gl.useProgram(shaderProgram);
+
+    // locate attributes and uniforms
+    vertexPositionAttrib = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+    vertexNormalAttrib = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+    colorAttrib = gl.getAttribLocation(shaderProgram, "aVertexColor");
+    mvpUniform = gl.getUniformLocation(shaderProgram, "uMVPMatrix");
+    lightPosUniform = gl.getUniformLocation(shaderProgram, "lightPos");
+    viewPosUniform = gl.getUniformLocation(shaderProgram, "viewPos");
+    lightColorUniform = gl.getUniformLocation(shaderProgram, "lightColor");
+    gl.getUniformLocation(shaderProgram, "uModelMatrix"); // Ensure matrix uniform is located
+
+    return shaderProgram;  // Return the shader program
 }
 
 function renderTriangles() {
+    gl.clearColor(1.0, 1.0, 1.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    // Set up view and projection matrices
-    var projectionMatrix = mat4.create();
-    var modelViewMatrix = mat4.create();
-    
-    // Create the projection matrix
-    mat4.perspective(projectionMatrix, Math.PI / 4, gl.canvas.width / gl.canvas.height, 0.1, 100.0);
-    mat4.lookAt(modelViewMatrix, Eye, vec3.add(vec3.create(), Eye, eyeDirection), upVector);
+    // bind vertex positions
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.vertexAttribPointer(vertexPositionAttrib, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(vertexPositionAttrib);
 
-    // Iterate through each model
-    for (let i = 0; i < models.length; i++) {
-        var model = models[i];
+    // bind normals
+    gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+    gl.vertexAttribPointer(vertexNormalAttrib, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(vertexNormalAttrib);
 
-        // Reset modelViewMatrix for each model
-        var modelViewMatrixForModel = mat4.create();
-        mat4.multiply(modelViewMatrixForModel, modelViewMatrix, model.transform);
-        
-        // Bind vertex buffer and draw the triangles for this model
-        gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-        gl.vertexAttribPointer(vertexPositionAttrib, 3, gl.FLOAT, false, 0, 0);
-        gl.enableVertexAttribArray(vertexPositionAttrib); // Enable the vertex position attribute
+    // bind colors
+    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+    gl.vertexAttribPointer(colorAttrib, 4, gl.FLOAT, false, 0, 0); // assuming colors are in vec4
+    gl.enableVertexAttribArray(colorAttrib);
 
-        // If you have normals, bind the normal buffer
-        if (normalBuffer) {
-            gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
-            gl.vertexAttribPointer(vertexNormalAttrib, 3, gl.FLOAT, false, 0, 0);
-            gl.enableVertexAttribArray(vertexNormalAttrib); // Enable the vertex normal attribute
-        }
+    // set uniforms (MVP matrix, light positions, etc.)
+    gl.uniform3f(lightPosUniform, -0.5, 1.5, -0.5); // example light position
+    gl.uniform3f(viewPosUniform, Eye[0], Eye[1], Eye[2]); // eye position
+    gl.uniform3f(lightColorUniform, 1.0, 1.0, 1.0); // white light
 
-        // Send the matrices to the shader
-        gl.uniformMatrix4fv(modelViewMatrixUniform, false, modelViewMatrixForModel);
-        gl.uniformMatrix4fv(projectionMatrixUniform, false, projectionMatrix);
-
-        // Draw call should use the model's data
-        gl.drawArrays(gl.TRIANGLES, 0, model.vertices.length); // Draw all vertices of the model
-    }
+    // draw triangles
+    // gl.drawArrays(gl.TRIANGLES, 0, coordArray.length / 3);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     requestAnimationFrame(renderTriangles);
 }
@@ -201,8 +243,9 @@ function renderTriangles() {
 
 function main() {
     setupWebGL(); 
+    setupShaders();
     loadTriangles(); 
-    setupShaders(); 
+     
     renderTriangles(); 
 }
 
@@ -225,16 +268,17 @@ document.addEventListener("keydown", function(event) {
         Eye[2] -= translationAmount;
     }
     else if (key === 'q') { // Move up
-        Eye[1] += translationAmount;
-    }
-    else if (key === 'e') { // Move down
         Eye[1] -= translationAmount;
     }
-    else if (key === 'A') { // Rotate left
-        mat4.rotateY(modelViewMatrix, modelViewMatrix, -rotationAmount);
+    else if (key === 'e') { // Move down
+        Eye[1] += translationAmount;
     }
-    else if (key === 'D') { // Rotate right
-        mat4.rotateY(modelViewMatrix, modelViewMatrix, rotationAmount);
+    else if (key === 'A' || key === 'D') {
+        if (key === 'A') {
+            mat4.rotate(modelViewMatrix, modelViewMatrix, -0.01, [0, 1, 0]);
+        } else {
+            mat4.rotate(modelViewMatrix, modelViewMatrix, 0.01, [0, 1, 0]);
+        }
     }
     else if (key === 'W') { // Pitch up
         mat4.rotateX(modelViewMatrix, modelViewMatrix, -rotationAmount);
@@ -248,9 +292,11 @@ document.addEventListener("keydown", function(event) {
     }
     else if (key === 'ArrowRight') { // Next model
         selectedModelIndex = (selectedModelIndex + 1) % models.length;
+        renderTriangles();
     }
     else if (key === 'ArrowLeft') { // Previous model
         selectedModelIndex = (selectedModelIndex - 1 + models.length) % models.length;
+        renderTriangles();
     }
 
     // Handle scaling for selected model
