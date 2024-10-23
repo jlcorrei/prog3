@@ -22,7 +22,7 @@ var vertexBuffers = []; // this contains vertex coordinate lists by set, in trip
 var normalBuffers = []; // this contains normal component lists by set, in triples
 var triSetSizes = []; // this contains the size of each triangle set
 var triangleBuffers = []; // lists of indices into vertexBuffers by set, in triples
-var viewDelta = 0; // how much to displace view with each key press
+var viewDelta = 0.1; // how much to displace view with each key press
 
 /* shader parameter locations */
 var vPosAttribLoc; // where to put position for vertex shader
@@ -70,23 +70,24 @@ function getJSONFile(url,descr) {
 // does stuff when keys are pressed
 function handleKeyDown(event) {
     
-    const modelEnum = {TRIANGLES: "triangles", ELLIPSOID: "ellipsoid"}; // enumerated model type
+    // const modelEnum = {TRIANGLES: "triangles", ELLIPSOID: "ellipsoid"}; // enumerated model type
     const dirEnum = {NEGATIVE: -1, POSITIVE: 1}; // enumerated rotation direction
     
-    function highlightModel(modelType,whichModel) {
+    function highlightModel(whichModel) {
         if (handleKeyDown.modelOn != null)
             handleKeyDown.modelOn.on = false;
         handleKeyDown.whichOn = whichModel;
-        if (modelType == modelEnum.TRIANGLES)
-            handleKeyDown.modelOn = inputTriangles[whichModel]; 
-        else
-            handleKeyDown.modelOn = inputEllipsoids[whichModel]; 
+        
+        handleKeyDown.modelOn = inputTriangles[whichModel]; 
         handleKeyDown.modelOn.on = true; 
     } // end highlight model
     
     function translateModel(offset) {
-        if (handleKeyDown.modelOn != null)
+        if (handleKeyDown.modelOn != null){
             vec3.add(handleKeyDown.modelOn.translation,handleKeyDown.modelOn.translation,offset);
+            renderTriangles();
+        }
+
     } // end translate model
 
     function rotateModel(axis,direction) {
@@ -96,6 +97,7 @@ function handleKeyDown(event) {
             mat4.fromRotation(newRotation,direction*rotateTheta,axis); // get a rotation matrix around passed axis
             vec3.transformMat4(handleKeyDown.modelOn.xAxis,handleKeyDown.modelOn.xAxis,newRotation); // rotate model x axis tip
             vec3.transformMat4(handleKeyDown.modelOn.yAxis,handleKeyDown.modelOn.yAxis,newRotation); // rotate model y axis tip
+            renderTriangles();
         } // end if there is a highlighted model
     } // end rotate model
     
@@ -118,24 +120,18 @@ function handleKeyDown(event) {
             handleKeyDown.whichOn = -1; // nothing highlighted
             break;
         case "ArrowRight": // select next triangle set
-            highlightModel(modelEnum.TRIANGLES,(handleKeyDown.whichOn+1) % numTriangleSets);
+            highlightModel((handleKeyDown.whichOn+1) % numTriangleSets);
             break;
         case "ArrowLeft": // select previous triangle set
-            highlightModel(modelEnum.TRIANGLES,(handleKeyDown.whichOn > 0) ? handleKeyDown.whichOn-1 : numTriangleSets-1);
+            highlightModel((handleKeyDown.whichOn > 0) ? handleKeyDown.whichOn-1 : numTriangleSets-1);
             break;
-        // case "ArrowUp": // select next ellipsoid
-        //     highlightModel(modelEnum.ELLIPSOID,(handleKeyDown.whichOn+1) % numEllipsoids);
-        //     break;
-        // case "ArrowDown": // select previous ellipsoid
-        //     highlightModel(modelEnum.ELLIPSOID,(handleKeyDown.whichOn > 0) ? handleKeyDown.whichOn-1 : numEllipsoids-1);
-        //     break;
             
         // view change
         case "KeyA": // translate view left, rotate left with shift
             Center = vec3.add(Center,Center,vec3.scale(temp,viewRight,viewDelta));
             if (!event.getModifierState("Shift"))
                 Eye = vec3.add(Eye,Eye,vec3.scale(temp,viewRight,viewDelta));
-            break;
+            break;  
         case "KeyD": // translate view right, rotate right with shift
             Center = vec3.add(Center,Center,vec3.scale(temp,viewRight,-viewDelta));
             if (!event.getModifierState("Shift"))
@@ -151,8 +147,8 @@ function handleKeyDown(event) {
             } // end if shift not pressed
             break;
         case "KeyW": // translate view forward, rotate down with shift
-            if (event.getModifierState("Shift")) {
-                Center = vec3.add(Center,Center,vec3.scale(temp,Up,-viewDelta));
+            if (event.getModifierState("Shift")) {w
+                Center = vec3.add(vec3.create(), Center, vec3.scale(temp, Up, viewDelta));
                 Up = vec3.cross(Up,viewRight,vec3.subtract(lookAt,Center,Eye)); /* global side effect */
             } else {
                 Eye = vec3.add(Eye,Eye,vec3.scale(temp,lookAt,viewDelta));
@@ -224,14 +220,11 @@ function handleKeyDown(event) {
                 vec3.set(inputTriangles[whichTriSet].xAxis,1,0,0);
                 vec3.set(inputTriangles[whichTriSet].yAxis,0,1,0);
             } // end for all triangle sets
-            for (var whichEllipsoid=0; whichEllipsoid<numEllipsoids; whichEllipsoid++) {
-                vec3.set(inputEllipsoids[whichEllipsoid].translation,0,0,0);
-                vec3.set(inputEllipsoids[whichTriSet].xAxis,1,0,0);
-                vec3.set(inputEllipsoids[whichTriSet].yAxis,0,1,0);
-            } // end for all ellipsoids
             break;
     } // end switch
 } // end handleKeyDown
+
+
 
 // set up the webGL environment
 function setupWebGL() {
@@ -701,7 +694,7 @@ function renderTriangles() {
     var pvMatrix = mat4.create(); // hand * proj * view matrices
     var pvmMatrix = mat4.create(); // hand * proj * view * model matrices
     
-    window.requestAnimationFrame(renderModels); // set up frame render callback
+    window.requestAnimationFrame(renderTriangles); // set up frame render callback
     
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); // clear frame/depth buffers
     
